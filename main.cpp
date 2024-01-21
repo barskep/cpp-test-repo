@@ -47,7 +47,6 @@ vector<string> SplitIntoWords(const string& text) {
 struct Document {
     int id;
     double relevance;
-    bool contains_plus_words;
 };
 
 class Query {
@@ -60,7 +59,7 @@ public:
             }
             
             if (word[0] == '-') {
-                minus_words_.insert(GetWordWithoutMinus(word));
+                minus_words_.insert(word.substr(1));
             } else {
                 query_words_.insert(word);
             }
@@ -77,16 +76,6 @@ public:
 private:
     set<string> query_words_;
     set<string> minus_words_;
-    
-    string GetWordWithoutMinus(const string& word) {
-        string result;
-        for (const char& c : word) {
-            if (c != '-') {
-                result += c;
-            }
-        }
-        return result;
-    }
 };
 
 class SearchServer {
@@ -105,6 +94,10 @@ public:
                 document_sizes_[document_id]++;
                 document_words_counter_[document_id][word]++;
             }
+        }
+
+        for (const auto& [word, count] : document_words_counter_[document_id]) {
+            document_words_tf_[document_id][word] = count / (document_sizes_[document_id] + 0.0);
         }
         
         ++document_count_;
@@ -131,6 +124,7 @@ private:
     map<string, set<int>> word_to_id_map_;
     
     map<int, map<string, int>> document_words_counter_;
+    map<int, map<string, double>> document_words_tf_;
     
     map<int, int> document_sizes_;
 
@@ -164,34 +158,28 @@ private:
 
     vector<Document> FindAllDocuments(const Query& query) const {
         vector<Document> result;
+
+        set<int> minus_documents = GetMinusDocuments(query);
         const set<string>& query_words = query.GetQueryWords();
-        const set<string>& minus_words = query.GetMinusWords();
-        
         map<string, double> words_idf = GetWordsIDFMap(query_words);
-        double relevance = 0.0;
-        bool contains_plus_words = false;
-        int minus_word_count = 0;
-        
-        for (const auto& [id, count] : document_sizes_) {
-            for (const string& query_word : query_words) {
-                relevance += GetWordTF(id, query_word) * words_idf[query_word];
-                if (!contains_plus_words) {
-                    contains_plus_words = GetWordCountInDocument(id, query_word) > 0;
-                }
+        map<int, double> relevance_map;
+        double word_tf = 0;
+
+        for (const string& query_word : query_words) {
+            if (word_to_id_map_.count(query_word) == 0) {
+                continue;
             }
-            
-        for (const string& minus_word : minus_words) {
-                minus_word_count = GetWordCountInDocument(id, minus_word);
-                if (minus_word_count > 0) {
-                    relevance = -1.0f;
-                    contains_plus_words = false;
-                }
+            for (const int& id : word_to_id_map_.at(query_word)) {
+                word_tf = document_words_tf_.at(id).at(query_word);
+                relevance_map[id] += word_tf * words_idf[query_word];
             }
-            if (relevance > 0 || contains_plus_words) {
-                result.push_back({id, relevance, contains_plus_words});
+        }
+
+        for (const auto& [id, relevance] : relevance_map) {
+            if (minus_documents.count(id) > 0) {
+                continue;
             }
-            contains_plus_words = false;
-            relevance = 0.0;
+            result.push_back({id, relevance_map[id]});
         }
         
         return result;
@@ -214,15 +202,22 @@ private:
         }
         return log(document_count_ / (word_to_id_map_.at(word).size() + 0.0));
     }
-    
-    double GetWordTF(const int& id, const string& word) const {
-        int count = GetWordCountInDocument(id, word);
+
+    set<int> GetMinusDocuments(const Query& query) const {
+        const set<string>& minus_words = query.GetMinusWords();
         
-        if (count == 0) {
-            return 0.0;
+        set<int> minus_documents;
+
+        for (const string& minus_word : minus_words) {
+            if (word_to_id_map_.count(minus_word) == 0) {
+                continue;
+            }
+            for (const int& id : word_to_id_map_.at(minus_word)) {
+                minus_documents.insert(id);
+            }
         }
-        
-        return count / (document_sizes_.at(id) + 0.0);
+
+        return minus_documents;
     }
 };
 
@@ -242,7 +237,7 @@ int main() {
     const SearchServer search_server = CreateSearchServer();
 
     const string query = ReadLine();
-    for (const auto& [document_id, relevance, plus_words_contain] : search_server.FindTopDocuments(query)) {
+    for (const auto& [document_id, relevance] : search_server.FindTopDocuments(query)) {
         cout << "{ document_id = "s << document_id << ", "
              << "relevance = "s << relevance << " }"s << endl;
     }
