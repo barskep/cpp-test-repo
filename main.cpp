@@ -155,7 +155,11 @@ private:
             return 0;
         }
         
-        return document_words_counter_.at(id).count(word);
+        if (document_words_counter_.at(id).count(word) == 0) {
+            return 0;
+        }
+        
+        return document_words_counter_.at(id).at(word);
     }
 
     vector<Document> FindAllDocuments(const Query& query) const {
