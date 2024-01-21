@@ -53,11 +53,7 @@ class Query {
 public: 
     void Setup(const string& query) {
         vector<string> words = SplitIntoWords(query);
-        for(const string& word : words) {
-            if (word.empty()) {
-                continue;
-            }
-            
+        for(const string& word : words) {            
             if (word[0] == '-') {
                 minus_words_.insert(word.substr(1));
             } else {
@@ -88,16 +84,9 @@ public:
 
     void AddDocument(int document_id, const string& document) {
         const vector<string> words = SplitIntoWordsNoStop(document);
+        const double size = words.size() + 0.0;
         for (const string& word : words) {
-            if (!word.empty()) {
-                word_to_id_map_[word].insert(document_id);
-                document_sizes_[document_id]++;
-                document_words_counter_[document_id][word]++;
-            }
-        }
-
-        for (const auto& [word, count] : document_words_counter_[document_id]) {
-            document_words_tf_[document_id][word] = count / (document_sizes_[document_id] + 0.0);
+            document_words_tf_[word][document_id] += 1 / size;
         }
         
         ++document_count_;
@@ -121,12 +110,7 @@ public:
 private:
     int document_count_ = 0;
     
-    map<string, set<int>> word_to_id_map_;
-    
-    map<int, map<string, int>> document_words_counter_;
-    map<int, map<string, double>> document_words_tf_;
-    
-    map<int, int> document_sizes_;
+    map<string, map<int, double>> document_words_tf_;
 
     set<string> stop_words_;
 
@@ -136,71 +120,53 @@ private:
 
     vector<string> SplitIntoWordsNoStop(const string& text) const {
         vector<string> words;
-        for (const string& word : SplitIntoWords(text)) {
-            if (!IsStopWord(word)) {
-                words.push_back(word);
+        string word;
+        for (const char c : text) {
+            if (c == ' ') {
+                if (!word.empty()) {
+                    if (!IsStopWord(word)) {
+                        words.push_back(word);
+                    }
+                    word.clear();
+                }
+            } else {
+                word += c;
             }
         }
+        if (!word.empty() && !IsStopWord(word)) {
+            words.push_back(word);
+        }
+
         return words;
-    }
-    
-    int GetWordCountInDocument(const int& id, const string& word) const {
-        if (document_words_counter_.count(id) == 0) {
-            return 0;
-        }
-        
-        if (document_words_counter_.at(id).count(word) == 0) {
-            return 0;
-        }
-        
-        return document_words_counter_.at(id).at(word);
     }
 
     vector<Document> FindAllDocuments(const Query& query) const {
         vector<Document> result;
 
-        set<int> minus_documents = GetMinusDocuments(query);
+        const set<int>& minus_documents = GetMinusDocuments(query);
         const set<string>& query_words = query.GetQueryWords();
-        map<string, double> words_idf = GetWordsIDFMap(query_words);
         map<int, double> relevance_map;
-        double word_tf = 0;
+        double word_idf = 0;
+        double size = 0;
 
         for (const string& query_word : query_words) {
-            if (word_to_id_map_.count(query_word) == 0) {
+            if (document_words_tf_.count(query_word) == 0) {
                 continue;
             }
-            for (const int& id : word_to_id_map_.at(query_word)) {
-                word_tf = document_words_tf_.at(id).at(query_word);
-                relevance_map[id] += word_tf * words_idf[query_word];
+            size = document_words_tf_.at(query_word).size() + 0.0;
+            for (const auto& [id, tf] : document_words_tf_.at(query_word)) {
+                word_idf = log(document_count_ / size);
+                relevance_map[id] += tf * word_idf;
             }
         }
 
         for (const auto& [id, relevance] : relevance_map) {
-            if (minus_documents.count(id) > 0) {
-                continue;
-            }
+            
             result.push_back({id, relevance_map[id]});
         }
         
         return result;
         
-    }
-    
-    map<string, double> GetWordsIDFMap(const set<string>& query_words) const {
-        map<string, double> result;
-        
-        for (const string& word : query_words) {
-            result[word] = GetWordIDF(word);
-        }
-        
-        return result;
-    }
-    
-    double GetWordIDF(const string& word) const {
-        if (word_to_id_map_.count(word) == 0) {
-            return 0.0;
-        }
-        return log(document_count_ / (word_to_id_map_.at(word).size() + 0.0));
     }
 
     set<int> GetMinusDocuments(const Query& query) const {
@@ -209,10 +175,10 @@ private:
         set<int> minus_documents;
 
         for (const string& minus_word : minus_words) {
-            if (word_to_id_map_.count(minus_word) == 0) {
+            if (document_words_tf_.count(minus_word) == 0) {
                 continue;
             }
-            for (const int& id : word_to_id_map_.at(minus_word)) {
+            for (const auto& [id, tf] : document_words_tf_.at(minus_word)) {
                 minus_documents.insert(id);
             }
         }
